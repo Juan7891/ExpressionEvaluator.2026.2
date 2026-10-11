@@ -1,5 +1,4 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Reflection.Metadata;
+﻿using System.Globalization;
 
 namespace Backend;
 
@@ -7,53 +6,70 @@ public static class ExpressionEvaluator
 {
     public static double Evalute(string infix) => EvalutePostfix(ToPostfix(infix));
 
+    // CAMBIO: ahora el postfijo se arma por TOKENS separados por espacio.
+    // Ej: "12+3.5" => "12 3.5 +"   (antes: "12+3.5" => "1235.+", que se perdía)
     private static string ToPostfix(string infix)
     {
         var posfix = string.Empty;
         var stack = new Stack<char>();
+        var number = string.Empty; // NUEVO: acumula los dígitos y el punto de un número
+
         foreach (var item in infix)
         {
+            if (char.IsWhiteSpace(item))
+            {
+                continue; // NUEVO: ignora espacios
+            }
+
             if (IsOperator(item))
             {
+                // NUEVO: al llegar un operador, el número que se venía armando terminó
+                if (number != string.Empty)
+                {
+                    posfix += number + " ";
+                    number = string.Empty;
+                }
+
                 if (item == ')')
                 {
                     var ope = stack.Pop();
-                    while(ope != '(')
+                    while (ope != '(')
                     {
-                        posfix += ope;
+                        posfix += ope + " ";
                         ope = stack.Pop();
                     }
                 }
                 else
                 {
-                    if (stack.Count == 0)
+                    // CAMBIO: antes se sacaba UN solo operador de la pila (if/else).
+                    // Ahora se sacan TODOS los de prioridad mayor o igual (while).
+                    // Así "10-2*3-4" da 0 y no 8.
+                    while (stack.Count > 0 && PriorityInfix(item) <= PriorityStack(stack.Peek()))
                     {
-                        stack.Push(item);
+                        posfix += stack.Pop() + " ";
                     }
-                    else
-                    {
-                        if (PriorityInfix(item) > PriorityStack(stack.Peek()))
-                        {
-                            stack.Push(item);
-                        }
-                        else
-                        {
-                            posfix += stack.Pop();
-                            stack.Push(item);
-                        }
-                    }
+                    stack.Push(item);
                 }
             }
             else
             {
-                posfix += item;
+                number += item; // CAMBIO: antes era posfix += item (dígito por dígito)
             }
         }
-        do
+
+        // NUEVO: el último número de la expresión (ej: el "1" en "...-1")
+        if (number != string.Empty)
         {
-            posfix += stack.Pop();
-        } while (stack.Count != 0);
-        return posfix;
+            posfix += number + " ";
+        }
+
+        // CAMBIO: while en vez de do-while, para no hacer Pop() con la pila vacía (ej: "7")
+        while (stack.Count != 0)
+        {
+            posfix += stack.Pop() + " ";
+        }
+
+        return posfix.Trim();
     }
 
     private static int PriorityStack(char op) => op switch
@@ -80,21 +96,40 @@ public static class ExpressionEvaluator
 
     private static bool IsOperator(char item) => item == '^' || item == '*' || item == '/' || item == '+' || item == '-' || item == '(' || item == ')';
 
+    // CAMBIO: se recorre por tokens (Split) y no por caracteres
     private static double EvalutePostfix(string postfix)
     {
         var stack = new Stack<double>();
-        foreach (var item in postfix)
+        var tokens = postfix.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var token in tokens)
         {
-            if (IsOperator(item))
+            if (token.Length == 1 && IsOperator(token[0]))
             {
+                if (stack.Count < 2)
+                {
+                    throw new Exception("Invalid expression.");
+                }
                 var ope2 = stack.Pop();
                 var ope1 = stack.Pop();
-                stack.Push(Calculate(ope1, ope2, item));
+                stack.Push(Calculate(ope1, ope2, token[0]));
             }
             else
             {
-                stack.Push(char.GetNumericValue(item));
+                // CAMBIO: antes char.GetNumericValue(item), que solo sirve para UN dígito.
+                // InvariantCulture => el punto siempre es el separador decimal
+                // (en Colombia la cultura usa coma y "3.1416" se leería mal).
+                if (!double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+                {
+                    throw new Exception($"Invalid number: {token}");
+                }
+                stack.Push(number);
             }
+        }
+
+        if (stack.Count != 1)
+        {
+            throw new Exception("Invalid expression.");
         }
         return stack.Pop();
     }
